@@ -12,6 +12,7 @@
 
 __docformat__ = 'restructuredtext'
 
+import multiprocessing
 import cocos
 import cocos_project
 import subprocess
@@ -141,7 +142,6 @@ class CCPluginCompile(cocos.CCPlugin):
             self._jobs = args.jobs
         else:
             self._jobs = self.get_num_of_cpu()
-
         self._has_sourcemap = args.source_map
         self._web_advanced = args.advanced
         self._no_res = args.no_res
@@ -166,17 +166,9 @@ class CCPluginCompile(cocos.CCPlugin):
 
     def get_num_of_cpu(self):
         try:
-            platform = sys.platform
-            if platform == 'win32':
-                if 'NUMBER_OF_PROCESSORS' in os.environ:
-                    return int(os.environ['NUMBER_OF_PROCESSORS'])
-                else:
-                    return 1
-            else:
-                from numpy.distutils import cpuinfo
-                return cpuinfo.cpu._getNCPUs()
+            return multiprocessing.cpu_count()
         except Exception:
-            print "Can't know cpuinfo, use default 1 cpu"
+            print "Failed to detect number of cpus, assume 1 cpu"
             return 1
 
     def _get_output_dir(self):
@@ -869,10 +861,9 @@ class CCPluginCompile(cocos.CCPlugin):
                 if match is None:
                     continue
 
-                ver_float = float(version)
-
                 # find the vs which version >= required version
                 try:
+                    ver_float = float('%s.%s' % (match.group(1), match.group(2)))
                     if ver_float >= float(require_version):
                         key = _winreg.OpenKey(vs, r"SxS\VS7")
                         vsPath, type = _winreg.QueryValueEx(key, version)
