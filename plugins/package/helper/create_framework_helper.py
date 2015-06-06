@@ -5,9 +5,20 @@ import json
 import re
 import shlex
 import uuid
+import sys
 
 import cocos
+from MultiLanguage import MultiLanguage
 
+def get_template_path():
+    if getattr(sys, 'frozen', None):
+        cur_path = os.path.realpath(os.path.dirname(sys.executable))
+        ret = os.path.join(cur_path, 'helper', 'template')
+    else:
+        cur_path = os.path.realpath(os.path.dirname(__file__))
+        ret = os.path.join(cur_path, 'template')
+
+    return ret
 
 class CreateFrameworkHelper(object):
 
@@ -19,13 +30,14 @@ class CreateFrameworkHelper(object):
     def run(self):
         package_path = self._package_path
         if os.path.isdir(package_path):
-            raise cocos.CCPluginError("ERROR: The path '%s' is exist!" % package_path)
+            raise cocos.CCPluginError(MultiLanguage.get_string('PACKAGE_PATH_EXISTED_FMT', package_path),
+                                      cocos.CCPluginError.ERROR_PATH_NOT_FOUND)
         os.makedirs(package_path)
 
         self._vars["__PACKAGE_NAME__"] = self._package_name
         self.generate_uuid_string()
 
-        template_path = os.path.dirname(__file__) + os.sep + "template"
+        template_path = get_template_path()
 
         self.copy_files_from_template(template_path, package_path)
         
@@ -50,7 +62,7 @@ class CreateFrameworkHelper(object):
         f = open(dst, "wb")
         f.write(text)
         f.close()
-        print "%s create OK" %dst
+        print MultiLanguage.get_string('PACKAGE_CREATE_OK_FMT', dst)
 
     def get_format_string(self, src_str):
         vars = self._vars

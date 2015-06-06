@@ -7,6 +7,10 @@
                 "to": ""
             },
             {
+                "from" : "bin/strings.json",
+                "to": ""
+            },
+            {
                 "from": "plugins/plugin_jscompile/bin",
                 "to": "bin",
                 "include": [
@@ -27,6 +31,10 @@
                     "*.py$",
                     "*.pyc$"
                 ]
+            },
+            {
+                "from": "plugins/package/helper/template",
+                "to": "helper/template"
             }
         ],
         "darwin": [

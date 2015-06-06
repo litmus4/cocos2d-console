@@ -12,6 +12,7 @@
 __docformat__ = 'restructuredtext'
 
 import cocos
+from MultiLanguage import MultiLanguage
 
 
 class CCPluginFramework(cocos.CCPlugin):
@@ -21,12 +22,12 @@ class CCPluginFramework(cocos.CCPlugin):
 
     @staticmethod
     def brief_description():
-        return "Manage frameworks for the project"
+        return MultiLanguage.get_string('FRAMEWORK_BRIEF')
 
     def parse_args(self, argv):
         if len(argv) < 1:
             print "usage: cocos framework [-h] COMMAND arg [arg ...]"
-            print "cocos package: error: too few arguments"
+            print MultiLanguage.get_string('FRAMEWORK_ERROR_TOO_FEW_ARGS')
             return None
 
         return {"command": argv[0]}
@@ -44,6 +45,9 @@ class CCPluginFramework(cocos.CCPlugin):
         elif command == "remove":
             from framework_remove import FrameworkRemove
             CommandClass = FrameworkRemove
+        elif command == "update":
+            from framework_update import FrameworkUpdate
+            CommandClass = FrameworkUpdate
         elif command == "create":
             from framework_create import FrameworkCreate
             CommandClass = FrameworkCreate
@@ -51,8 +55,8 @@ class CCPluginFramework(cocos.CCPlugin):
             from framework_set import FrameworkSet
             CommandClass = FrameworkSet
         else:
-            message = "Fatal: invalid command 'cocos framework %s'" % command
-            raise cocos.CCPluginError(message)
+            message = MultiLanguage.get_string('FRAMEWORK_ERROR_INVALID_CMD_FMT', command)
+            raise cocos.CCPluginError(message, cocos.CCPluginError.ERROR_CMD_NOT_FOUND)
 
         commandObject = CommandClass()
         commandObject.run(argv[1:])

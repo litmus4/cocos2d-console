@@ -12,13 +12,9 @@
 
 __docformat__ = 'restructuredtext'
 
-import sys
 import os
-import json
-import inspect
-from xml.dom import minidom
-import shutil
 import cocos
+from MultiLanguage import MultiLanguage
 
 
 class CCPluginDeploy(cocos.CCPlugin):
@@ -36,11 +32,11 @@ class CCPluginDeploy(cocos.CCPlugin):
 
     @staticmethod
     def brief_description():
-        return "Deploy a project to the target"
+        return MultiLanguage.get_string('DEPLOY_BRIEF')
 
     def _add_custom_options(self, parser):
         parser.add_argument("-m", "--mode", dest="mode", default='debug',
-                          help="Set the deploy mode, should be debug|release, default is debug.")
+                          help=MultiLanguage.get_string('DEPLOY_ARG_MODE'))
 
     def _check_custom_options(self, args):
 
@@ -53,10 +49,6 @@ class CCPluginDeploy(cocos.CCPlugin):
 
     def _is_debug_mode(self):
         return self._mode == 'debug'
-
-    def _xml_attr(self, dir, file_name, node_name, attr):
-        doc = minidom.parse(os.path.join(dir, file_name))
-        return doc.getElementsByTagName(node_name)[0].getAttribute(attr)
 
     def deploy_ios(self, dependencies):
         if not self._platforms.is_ios_active():
@@ -103,7 +95,8 @@ class CCPluginDeploy(cocos.CCPlugin):
         find_major = -1
         find_minor = -1
         for reg_flag in reg_flag_list:
-            cocos.Logging.info("find xap deployment tools in reg : %s" % ("32bit" if reg_flag == _winreg.KEY_WOW64_32KEY else "64bit"))
+            cocos.Logging.info(MultiLanguage.get_string('DEPLOY_INFO_FIND_XAP_FMT',
+                                                        ("32bit" if reg_flag == _winreg.KEY_WOW64_32KEY else "64bit")))
             try:
                 wp = _winreg.OpenKey(
                     _winreg.HKEY_LOCAL_MACHINE,
@@ -155,7 +148,8 @@ class CCPluginDeploy(cocos.CCPlugin):
         # find the XapDeployCmd.exe
         self.deploy_tool = self.find_xap_deploy_tool()
         if self.deploy_tool is None:
-            raise cocos.CCPluginError("XapDeployCmd.exe not found, can't deploy the application.")
+            raise cocos.CCPluginError(MultiLanguage.get_string('DEPLOY_ERROR_XAPCMD_NOT_FOUND'),
+                                      cocos.CCPluginError.ERROR_TOOLS_NOT_FOUND)
 
         # uninstall the app on wp8 by product ID
         try:
@@ -176,18 +170,11 @@ class CCPluginDeploy(cocos.CCPlugin):
         if not self._platforms.is_android_active():
             return
 
-        project_dir = self._project.get_project_dir()
-        android_project_dir = self._platforms.project_path()
-
-        cocos.Logging.info("installing on device")
-        self.package = self._xml_attr(android_project_dir, 'AndroidManifest.xml', 'manifest', 'package')
-        activity_name = self._xml_attr(android_project_dir, 'AndroidManifest.xml', 'activity', 'android:name')
-        if activity_name.startswith('.'):
-            self.activity = self.package + activity_name
-        else:
-            self.activity = activity_name
+        cocos.Logging.info(MultiLanguage.get_string('DEPLOY_INFO_INSTALLING_APK'))
 
         compile_dep = dependencies['compile']
+        self.package = compile_dep.android_package
+        self.activity = compile_dep.android_activity
         apk_path = compile_dep.apk_path
         sdk_root = cocos.check_environment_variable('ANDROID_SDK_ROOT')
         adb_path = cocos.CMDRunner.convert_path_to_cmd(os.path.join(sdk_root, 'platform-tools', 'adb'))
@@ -209,7 +196,7 @@ class CCPluginDeploy(cocos.CCPlugin):
 
     def run(self, argv, dependencies):
         self.parse_args(argv)
-        cocos.Logging.info('Deploying mode: %s' % self._mode)
+        cocos.Logging.info(MultiLanguage.get_string('DEPLOY_INFO_MODE_FMT', self._mode))
         self.deploy_ios(dependencies)
         self.deploy_mac(dependencies)
         self.deploy_android(dependencies)
