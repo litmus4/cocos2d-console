@@ -22,10 +22,15 @@ from contextlib import contextmanager
 import cocos_project
 import shutil
 import string
+import locale
+import gettext
+import json
 
+
+# FIXME: MultiLanguage should be deprecated in favor of gettext
 from MultiLanguage import MultiLanguage
 
-COCOS2D_CONSOLE_VERSION = '1.9'
+COCOS2D_CONSOLE_VERSION = '2.1'
 
 
 class Cocos2dIniParser:
@@ -38,7 +43,7 @@ class Cocos2dIniParser:
         self.cocos2d_path = os.path.dirname(os.path.abspath(sys.argv[0]))
         self._cp.read(os.path.join(self.cocos2d_path, "cocos2d.ini"))
 
-        # XXXX: override with local config ??? why ???
+        # XXX: override with local config ??? why ???
         self._cp.read("~/.cocos2d-js/cocos2d.ini")
 
     def parse_plugins(self):
@@ -110,6 +115,7 @@ class Cocos2dIniParser:
 
         return ret
 
+
 class Logging:
     # TODO maybe the right way to do this is to use something like colorama?
     RED = '\033[31m'
@@ -161,6 +167,7 @@ class CCPluginError(Exception):
 
     def get_error_no(self):
         return self.error_no
+
 
 class CMDRunner(object):
 
@@ -234,6 +241,7 @@ class CMDRunner(object):
         # print("!!!!! Convert %s to %s\n" % (path, ret))
         return ret
 
+
 class DataStatistic(object):
     '''
     In order to improve cocos, we periodically send anonymous data about how you use cocos.
@@ -251,8 +259,6 @@ class DataStatistic(object):
     # change the last time statistics status in local config file.
     @classmethod
     def change_last_state(cls, cfg_file, enabled):
-        import json
-
         # get current local config info
         if not os.path.isfile(cfg_file):
             cur_info = {}
@@ -275,8 +281,6 @@ class DataStatistic(object):
     # get the last time statistics status in local config file.
     @classmethod
     def get_last_state(cls, cfg_file):
-        import json
-
         # get the config
         if not os.path.isfile(cfg_file):
             cur_info = None
@@ -358,13 +362,14 @@ class DataStatistic(object):
         except:
             pass
 
+
 #
 # Plugins should be a sublass of CCPlugin
 #
 class CCPlugin(object):
 
-    def _run_cmd(self, command):
-        CMDRunner.run_cmd(command, self._verbose)
+    def _run_cmd(self, command, cwd=None):
+        CMDRunner.run_cmd(command, self._verbose, cwd)
 
     def _output_for(self, command):
         return CMDRunner.output_for(command, self._verbose)
@@ -492,7 +497,7 @@ class CCPlugin(object):
 
     # returns help
     @staticmethod
-    def brief_description(self):
+    def brief_description():
         pass
 
     # Constructor
@@ -508,7 +513,7 @@ class CCPlugin(object):
             self._platforms.select_one()
 
     # Run it
-    def run(self, argv):
+    def run(self, argv, dependencies):
         pass
 
     # If a plugin needs to add custom parameters, override this method.
@@ -525,6 +530,8 @@ class CCPlugin(object):
     def parse_args(self, argv):
         from argparse import ArgumentParser
 
+        # FIXME:
+        # CCPlugin should not parse any argument. Plugins are responsoble for doing it
         parser = ArgumentParser(prog="cocos %s" % self.__class__.plugin_name(),
                                 description=self.__class__.brief_description())
         parser.add_argument("-s", "--src",
@@ -538,6 +545,10 @@ class CCPlugin(object):
         parser.add_argument("-p", "--platform",
                             dest="platform",
                             help=MultiLanguage.get_string('COCOS_HELP_ARG_PLATFORM'))
+        parser.add_argument("--list-platforms",
+                            action="store_true",
+                            dest="listplatforms",
+                            help=_("List available platforms"))
         parser.add_argument("--proj-dir",
                             dest="proj_dir",
                             help=MultiLanguage.get_string('COCOS_HELP_ARG_PROJ_DIR'))
@@ -562,8 +573,15 @@ class CCPlugin(object):
                 raise CCPluginError(MultiLanguage.get_string('COCOS_ERROR_UNKNOWN_PLATFORM_FMT', args.platform),
                                     CCPluginError.ERROR_WRONG_ARGS)
 
+        if args.listplatforms and self._project is not None:
+            platforms = cocos_project.Platforms(self._project, args.platform, args.proj_dir)
+            p = platforms.get_available_platforms().keys()
+            print('{"platforms":' + json.dumps(p) + '}')
+            sys.exit(0)
+
         self.init(args)
         self._check_custom_options(args)
+
 
 def get_current_path():
     if getattr(sys, 'frozen', None):
@@ -572,6 +590,7 @@ def get_current_path():
         ret = os.path.realpath(os.path.dirname(__file__))
 
     return ret
+
 
 # get_class from: http://stackoverflow.com/a/452981
 def get_class(kls):
@@ -830,7 +849,8 @@ def run_plugin(command, argv, plugins):
                 # FIXME check there's not circular dependencies
                 dependencies_objects[dep_name] = run_plugin(
                     dep_name, argv, plugins)
-        Logging.info(MultiLanguage.get_string('COCOS_INFO_RUNNING_PLUGIN_FMT', plugin.__class__.plugin_name()))
+        # don't print this info. Not useful to users, and generates noise when parsing output
+#        Logging.info(MultiLanguage.get_string('COCOS_INFO_RUNNING_PLUGIN_FMT', plugin.__class__.plugin_name()))
         plugin.run(argv, dependencies_objects)
         return plugin
 
@@ -845,14 +865,25 @@ def _check_python_version():
         ret = False
 
     if not ret:
-        print (MultiLanguage.get_string('COCOS_PYTHON_VERSION_TIP_FMT')
-           % (major_ver, minor_ver))
+        print(MultiLanguage.get_string('COCOS_PYTHON_VERSION_TIP_FMT') % (major_ver, minor_ver))
 
     return ret
 
 
 if __name__ == "__main__":
     DataStatistic.stat_event('cocos', 'start', 'invoked')
+
+    # gettext
+    locale.setlocale(locale.LC_ALL, '')  # use user's preferred locale
+    language, encoding = locale.getlocale()
+    if language is not None:
+        filename = "language_%s.mo" % language[0:2]
+        try:
+            trans = gettext.GNUTranslations(open(filename, "rb"))
+        except IOError:
+            trans = gettext.NullTranslations()
+        trans.install()
+        _ = trans.gettext
 
     # Parse the arguments, specify the language
     language_arg = '--ol'
