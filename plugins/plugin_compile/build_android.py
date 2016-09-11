@@ -177,7 +177,7 @@ class AndroidBuilder(object):
         sdk_tool_path = os.path.join(self.sdk_root, "tools", "android")
 
         # check the android platform
-        target_str = self.check_android_platform(self.sdk_root, android_platform, manifest_path, False)
+        target_str = self.check_android_platform(self.sdk_root, android_platform, manifest_path)
 
         # update project
         command = "%s update project -t %s -p %s" % (cocos.CMDRunner.convert_path_to_cmd(sdk_tool_path), target_str, manifest_path)
@@ -198,17 +198,7 @@ class AndroidBuilder(object):
                 shutil.copy(src_path, dst_path)
 
     def get_toolchain_version(self, ndk_root, compile_obj):
-        # use the folder name in toolchains to check get gcc version
-        toolchains_path = os.path.join(ndk_root, 'toolchains')
-        dir_names = os.listdir(toolchains_path)
-        # check if gcc 4.9 exists
-        for dir_name in dir_names:
-            if dir_name.endswith('4.9'):
-                return 4.9
-
-        # use gcc 4.8
-        compile_obj.add_warning_at_end(MultiLanguage.get_string('COMPILE_WARNING_TOOLCHAIN_FMT', '4.8'))
-        return '4.8'
+        return '4.9'
 
 
     def do_ndk_build(self, ndk_build_param, build_mode, compile_obj):
@@ -285,55 +275,22 @@ class AndroidBuilder(object):
                 abs_lib_path = os.path.join(property_path, lib_path)
                 abs_lib_path = os.path.normpath(abs_lib_path)
                 if os.path.isdir(abs_lib_path):
-                    target_str = self.check_android_platform(sdk_root, android_platform, abs_lib_path, True)
+                    target_str = self.check_android_platform(sdk_root, android_platform, abs_lib_path)
                     command = "%s update lib-project -p %s -t %s" % (cocos.CMDRunner.convert_path_to_cmd(sdk_tool_path), abs_lib_path, target_str)
                     self._run_cmd(command)
 
                     self.update_lib_projects(sdk_root, sdk_tool_path, android_platform, abs_lib_path)
 
-    def select_default_android_platform(self, min_api_level):
-        ''' select a default android platform in SDK_ROOT
-        '''
-
-        sdk_root = cocos.check_environment_variable('ANDROID_SDK_ROOT')
-        platforms_dir = os.path.join(sdk_root, "platforms")
-        ret_num = -1
-        ret_platform = ""
-        if os.path.isdir(platforms_dir):
-            for dir_name in os.listdir(platforms_dir):
-                if not os.path.isdir(os.path.join(platforms_dir, dir_name)):
-                    continue
-
-                num = self.get_api_level(dir_name, raise_error=False)
-                if num >= min_api_level:
-                    if ret_num == -1 or ret_num > num:
-                        ret_num = num
-                        ret_platform = dir_name
-
-        if ret_num != -1:
-            return ret_platform
-        else:
-            return None
-
-
     def get_api_level(self, target_str, raise_error=True):
-        special_targats_info = {
-            "android-4.2" : 17,
-            "android-L" : 20
-        }
-
-        if special_targats_info.has_key(target_str):
-            ret = special_targats_info[target_str]
+        match = re.match(r'android-(\d+)', target_str)
+        if match is not None:
+            ret = int(match.group(1))
         else:
-            match = re.match(r'android-(\d+)', target_str)
-            if match is not None:
-                ret = int(match.group(1))
+            if raise_error:
+                raise cocos.CCPluginError(MultiLanguage.get_string('COMPILE_ERROR_NOT_VALID_AP_FMT', target_str),
+                                          cocos.CCPluginError.ERROR_PARSE_FILE)
             else:
-                if raise_error:
-                    raise cocos.CCPluginError(MultiLanguage.get_string('COMPILE_ERROR_NOT_VALID_AP_FMT', target_str),
-                                              cocos.CCPluginError.ERROR_PARSE_FILE)
-                else:
-                    ret = -1
+                ret = -1
 
         return ret
 
@@ -358,41 +315,25 @@ class AndroidBuilder(object):
                                   cocos.CCPluginError.ERROR_PARSE_FILE)
 
     # check the selected android platform
-    def check_android_platform(self, sdk_root, android_platform, proj_path, auto_select):
+    def check_android_platform(self, sdk_root, android_platform, proj_path):
         ret = android_platform
         min_platform = self.get_target_config(proj_path)
         if android_platform is None:
-            # not specified platform, found one
-            cocos.Logging.info(MultiLanguage.get_string('COMPILE_INFO_AUTO_SELECT_AP'))
-            ret = self.select_default_android_platform(min_platform)
+            # not specified platform, use the one in project.properties
+            ret = 'android-%d' % min_platform
         else:
             # check whether it's larger than min_platform
             select_api_level = self.get_api_level(android_platform)
             if select_api_level < min_platform:
-                if auto_select:
-                    # select one for project
-                    ret = self.select_default_android_platform(min_platform)
-                else:
-                    # raise error
-                    raise cocos.CCPluginError(MultiLanguage.get_string('COMPILE_ERROR_AP_TOO_LOW_FMT',
-                                                                       (proj_path, min_platform, select_api_level)),
-                                              cocos.CCPluginError.ERROR_WRONG_ARGS)
-
-        if ret is None:
-            raise cocos.CCPluginError(MultiLanguage.get_string('COMPILE_ERROR_AP_NOT_FOUND_FMT',
-                                                               (proj_path, min_platform)),
-                                      cocos.CCPluginError.ERROR_PARSE_FILE)
+                # raise error
+                raise cocos.CCPluginError(MultiLanguage.get_string('COMPILE_ERROR_AP_TOO_LOW_FMT',
+                                                                   (proj_path, min_platform, select_api_level)),
+                                          cocos.CCPluginError.ERROR_WRONG_ARGS)
 
         ret_path = os.path.join(cocos.CMDRunner.convert_path_to_python(sdk_root), "platforms", ret)
         if not os.path.isdir(ret_path):
             raise cocos.CCPluginError(MultiLanguage.get_string('COMPILE_ERROR_NO_AP_IN_SDK_FMT', ret),
                                       cocos.CCPluginError.ERROR_PATH_NOT_FOUND)
-
-        special_platforms_info = {
-            "android-4.2" : "android-17"
-        }
-        if special_platforms_info.has_key(ret):
-            ret = special_platforms_info[ret]
 
         return ret
 
@@ -470,6 +411,58 @@ class AndroidBuilder(object):
         cmd = '"%s" --parallel --info assemble%s' % (gradle_path, mode_str)
         self._run_cmd(cmd, cwd=self.app_android_root)
 
+    class LuaBuildType:
+        UNKNOWN = -1
+        ONLY_BUILD_64BIT = 1
+        ONLY_BUILD_32BIT = 2
+        BUILD_32BIT_AND_64BIT = 3
+
+    def _do_get_build_type(self, str):
+        # remove the '#' and the contents after it
+        str = str.split('#')[0]
+        build_64bit = str.find('arm64-v8a') != -1
+
+        # check if need to build other architecture
+        build_other_arch = False
+        other_archs = ('armeabi', 'armeabi-v7a', 'x86') # other arches are not supported
+        for arch in other_archs:
+            if str.find(arch) != -1:
+                build_other_arch = True
+                break
+
+        if build_64bit or build_other_arch:
+            if build_64bit:
+                if build_other_arch:
+                    print 'build 64bit and 32bit'
+                    return LuaBuildType.BUILD_32BIT_AND_64BIT
+                else:
+                    print 'only build 64bit'
+                    return LuaBuildType.ONLY_BUILD_64BIT
+            else:
+                print 'only build 32bit'
+                return LuaBuildType.ONLY_BUILD_32BIT
+
+        return LuaBuildType.UNKNOWN
+
+    # check if arm64-v8a is set in Application.mk
+    def _get_build_type(self, param_of_appabi):
+
+        # get build type from parameter
+        if param_of_appabi:
+            return self._do_get_build_type(param_of_appabi)
+        
+        # get build type from Application.mk
+        applicationmk_path = os.path.join(self.app_android_root, "jni/Application.mk")
+        with open(applicationmk_path) as f:
+            for line in f:
+                if line.find('APP_ABI') == -1:
+                    continue
+                build_type = self._do_get_build_type(line)
+                if build_type != LuaBuildType.UNKNOWN:
+                    return build_type
+
+        return LuaBuildType.UNKNOWN
+
     def do_build_apk(self, build_mode, no_apk, output_dir, custom_step_args, compile_obj):
         if self.use_studio:
             assets_dir = os.path.join(self.app_android_root, "app", "assets")
@@ -503,7 +496,34 @@ class AndroidBuilder(object):
 
         # check the project config & compile the script files
         if self._project._is_lua_project():
-            compile_obj.compile_lua_scripts(assets_dir, assets_dir)
+            print "generate byte code ............"
+            src_dir = os.path.join(assets_dir, 'src')
+            build_type = self._get_build_type(compile_obj.app_abi)
+
+            # only build 64bit
+            if build_type == LuaBuildType.ONLY_BUILD_64BIT:
+                dst_dir = os.path.join(assets_dir, 'src/64bit')
+                compile_obj.compile_lua_scripts(src_dir, dst_dir, True)
+                # remove unneeded lua files
+                compile_obj._remove_file_with_ext(src_dir, '.lua')
+                shutil.rmtree(os.path.join(src_dir, 'cocos'))
+
+            # only build 32bit
+            if build_type == LuaBuildType.ONLY_BUILD_32BIT:
+                # build 32-bit bytecode
+                compile_obj.compile_lua_scripts(src_dir, src_dir, False)
+            
+            # build 32bit and 64bit
+            if build_type == LuaBuildType.BUILD_32BIT_AND_64BIT:
+                # build 64-bit bytecode
+                dst_dir = os.path.join(assets_dir, 'src/64bit')
+                compile_obj.compile_lua_scripts(src_dir, dst_dir, True)
+                # build 32-bit bytecode
+                compile_obj.compile_lua_scripts(src_dir, src_dir, False)
+
+            if build_type == LuaBuildType.UNKNOWN:
+                # haven't set APP_ABI in parameter and Application.mk, default build 32bit
+                compile_obj.compile_lua_scripts(src_dir, src_dir, False)
 
         if self._project._is_js_project():
             compile_obj.compile_js_scripts(assets_dir, assets_dir)
