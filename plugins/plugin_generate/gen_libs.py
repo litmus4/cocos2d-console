@@ -63,6 +63,8 @@ class LibsCompiler(cocos.CCPlugin):
         group = parser.add_argument_group(MultiLanguage.get_string('GEN_LIBS_GROUP_ANDROID'))
         group.add_argument("--app-abi", dest="app_abi",
                             help=MultiLanguage.get_string('GEN_LIBS_ARG_ABI'))
+        group.add_argument("--ap", dest="android_platform",
+                            help=MultiLanguage.get_string('COMPILE_ARG_AP'))
 
         (args, unknown) = parser.parse_known_args(argv)
         self.init(args)
@@ -129,6 +131,7 @@ class LibsCompiler(cocos.CCPlugin):
             self.app_abi = 'armeabi'
         else:
             self.app_abi = args.app_abi
+        self.android_platform = args.android_platform
 
         self.lib_dir = os.path.normpath(os.path.join(self.repo_x, self.cfg_info[LibsCompiler.KEY_LIBS_OUTPUT]))
 
@@ -361,6 +364,8 @@ class LibsCompiler(cocos.CCPlugin):
         # build the simulator project
         proj_path = os.path.join(engine_dir, 'tools/simulator')
         build_cmd = "%s compile -s %s -p android --ndk-mode %s --app-abi %s" % (cmd_path, proj_path, self.mode, self.app_abi)
+        if self.android_platform is not None:
+            build_cmd += ' --ap %s' % self.android_platform
         self._run_cmd(build_cmd)
 
         # copy .a to prebuilt dir
@@ -408,6 +413,11 @@ class LibsCompiler(cocos.CCPlugin):
                 armlibs = ["armeabi", "armeabi-v7a"]
                 for fold in armlibs:
                     self.trip_libs(strip_cmd_path, os.path.join(android_out_dir, fold))
+
+            # strip arm64-v8a libs
+            strip_cmd_path = os.path.join(ndk_root, "toolchains/aarch64-linux-android-4.9/prebuilt/%s/aarch64-linux-android/bin/%s" % (sys_folder_name, strip_execute_name))
+            if os.path.exists(strip_cmd_path) and os.path.exists(os.path.join(android_out_dir, "arm64-v8a")):
+                self.trip_libs(strip_cmd_path, os.path.join(android_out_dir, 'arm64-v8a'))
 
             # strip x86 libs
             strip_cmd_path = os.path.join(ndk_root, "toolchains/x86-4.8/prebuilt/%s/i686-linux-android/bin/%s" % (sys_folder_name, strip_execute_name))

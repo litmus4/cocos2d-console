@@ -198,6 +198,9 @@ class AndroidBuilder(object):
                 shutil.copy(src_path, dst_path)
 
     def get_toolchain_version(self, ndk_root, compile_obj):
+        # it should be possible to override the toolchain
+        if 'NDK_TOOLCHAIN_VERSION' in os.environ:
+            return os.environ['NDK_TOOLCHAIN_VERSION']
         return '4.9'
 
 
@@ -219,12 +222,12 @@ class AndroidBuilder(object):
         for cfg_path in self.ndk_module_paths:
             if cfg_path.find("${COCOS_X_ROOT}") >= 0:
                 cocos_root = cocos.check_environment_variable("COCOS_X_ROOT")
-                module_paths.append(cfg_path.replace("${COCOS_X_ROOT}", cocos_root))
+                module_paths.append(os.path.normpath(cfg_path.replace("${COCOS_X_ROOT}", cocos_root)))
             elif cfg_path.find("${COCOS_FRAMEWORKS}") >= 0:
                 cocos_frameworks = cocos.check_environment_variable("COCOS_FRAMEWORKS")
-                module_paths.append(cfg_path.replace("${COCOS_FRAMEWORKS}", cocos_frameworks))
+                module_paths.append(os.path.normpath(cfg_path.replace("${COCOS_FRAMEWORKS}", cocos_frameworks)))
             else:
-                module_paths.append(os.path.join(self.app_android_root, cfg_path))
+                module_paths.append(os.path.normpath(os.path.join(self.app_android_root, cfg_path)))
 
         # delete template static and dynamic files
         obj_local_dir = os.path.join(ndk_work_dir, "obj", "local")
@@ -317,18 +320,10 @@ class AndroidBuilder(object):
     # check the selected android platform
     def check_android_platform(self, sdk_root, android_platform, proj_path):
         ret = android_platform
-        min_platform = self.get_target_config(proj_path)
         if android_platform is None:
+            min_platform = self.get_target_config(proj_path)
             # not specified platform, use the one in project.properties
             ret = 'android-%d' % min_platform
-        else:
-            # check whether it's larger than min_platform
-            select_api_level = self.get_api_level(android_platform)
-            if select_api_level < min_platform:
-                # raise error
-                raise cocos.CCPluginError(MultiLanguage.get_string('COMPILE_ERROR_AP_TOO_LOW_FMT',
-                                                                   (proj_path, min_platform, select_api_level)),
-                                          cocos.CCPluginError.ERROR_WRONG_ARGS)
 
         ret_path = os.path.join(cocos.CMDRunner.convert_path_to_python(sdk_root), "platforms", ret)
         if not os.path.isdir(ret_path):
@@ -434,15 +429,15 @@ class AndroidBuilder(object):
             if build_64bit:
                 if build_other_arch:
                     print 'build 64bit and 32bit'
-                    return LuaBuildType.BUILD_32BIT_AND_64BIT
+                    return self.LuaBuildType.BUILD_32BIT_AND_64BIT
                 else:
                     print 'only build 64bit'
-                    return LuaBuildType.ONLY_BUILD_64BIT
+                    return self.LuaBuildType.ONLY_BUILD_64BIT
             else:
                 print 'only build 32bit'
-                return LuaBuildType.ONLY_BUILD_32BIT
+                return self.LuaBuildType.ONLY_BUILD_32BIT
 
-        return LuaBuildType.UNKNOWN
+        return self.LuaBuildType.UNKNOWN
 
     # check if arm64-v8a is set in Application.mk
     def _get_build_type(self, param_of_appabi):
@@ -452,16 +447,19 @@ class AndroidBuilder(object):
             return self._do_get_build_type(param_of_appabi)
         
         # get build type from Application.mk
-        applicationmk_path = os.path.join(self.app_android_root, "jni/Application.mk")
+        if self.use_studio:
+            applicationmk_path = os.path.join(self.app_android_root, "app/jni/Application.mk")
+        else:
+            applicationmk_path = os.path.join(self.app_android_root, "jni/Application.mk")
         with open(applicationmk_path) as f:
             for line in f:
                 if line.find('APP_ABI') == -1:
                     continue
                 build_type = self._do_get_build_type(line)
-                if build_type != LuaBuildType.UNKNOWN:
+                if build_type != self.LuaBuildType.UNKNOWN:
                     return build_type
 
-        return LuaBuildType.UNKNOWN
+        return self.LuaBuildType.UNKNOWN
 
     def do_build_apk(self, build_mode, no_apk, output_dir, custom_step_args, compile_obj):
         if self.use_studio:
@@ -501,27 +499,30 @@ class AndroidBuilder(object):
             build_type = self._get_build_type(compile_obj.app_abi)
 
             # only build 64bit
-            if build_type == LuaBuildType.ONLY_BUILD_64BIT:
-                dst_dir = os.path.join(assets_dir, 'src/64bit')
-                compile_obj.compile_lua_scripts(src_dir, dst_dir, True)
-                # remove unneeded lua files
-                compile_obj._remove_file_with_ext(src_dir, '.lua')
-                shutil.rmtree(os.path.join(src_dir, 'cocos'))
+            if build_type == self.LuaBuildType.ONLY_BUILD_64BIT:
+                if build_mode == 'release':
+                    dst_dir = os.path.join(assets_dir, 'src/64bit')
+                    compile_obj.compile_lua_scripts(src_dir, dst_dir, True)
+                    # remove unneeded lua files
+                    compile_obj._remove_file_with_ext(src_dir, '.lua')
+                    shutil.rmtree(os.path.join(src_dir, 'cocos'))
+                else:
+                    compile_obj.compile_lua_scripts(src_dir, src_dir, False)
 
             # only build 32bit
-            if build_type == LuaBuildType.ONLY_BUILD_32BIT:
+            if build_type == self.LuaBuildType.ONLY_BUILD_32BIT:
                 # build 32-bit bytecode
                 compile_obj.compile_lua_scripts(src_dir, src_dir, False)
             
             # build 32bit and 64bit
-            if build_type == LuaBuildType.BUILD_32BIT_AND_64BIT:
+            if build_type == self.LuaBuildType.BUILD_32BIT_AND_64BIT:
                 # build 64-bit bytecode
                 dst_dir = os.path.join(assets_dir, 'src/64bit')
                 compile_obj.compile_lua_scripts(src_dir, dst_dir, True)
                 # build 32-bit bytecode
                 compile_obj.compile_lua_scripts(src_dir, src_dir, False)
 
-            if build_type == LuaBuildType.UNKNOWN:
+            if build_type == self.LuaBuildType.UNKNOWN:
                 # haven't set APP_ABI in parameter and Application.mk, default build 32bit
                 compile_obj.compile_lua_scripts(src_dir, src_dir, False)
 
