@@ -37,13 +37,24 @@ class AndroidBuilder(object):
     GRADLE_KEY_STORE_PASS = "RELEASE_STORE_PASSWORD"
     GRADLE_KEY_ALIAS_PASS = "RELEASE_KEY_PASSWORD"
 
-    def __init__(self, verbose, app_android_root, no_res, proj_obj, use_studio=False):
+    GRADLE_PROP_TARGET_VERSION = 'PROP_TARGET_SDK_VERSION'
+    GRADLE_PROP_NDK_MODE = 'PROP_NDK_MODE'
+    GRADLE_PROP_APP_ABI = 'PROP_APP_ABI'
+    GRADLE_PROP_COMPILE_SCRIPT = 'PROP_COMPILE_SCRIPT'
+    GRADLE_PROP_LUA_ENCRYPT = 'PROP_LUA_ENCRYPT'
+    GRADLE_PROP_LUA_ENCRYPT_KEY = 'PROP_LUA_ENCRYPT_KEY'
+    GRADLE_PROP_LUA_ENCRYPT_SIGN = 'PROP_LUA_ENCRYPT_SIGN'
+
+    def __init__(self, verbose, app_android_root, no_res, proj_obj, ndk_mode, app_abi, use_studio=False, gradle_support_ndk=False):
         self._verbose = verbose
 
         self.app_android_root = app_android_root
         self._no_res = no_res
         self._project = proj_obj
         self.use_studio = use_studio
+        self.gradle_support_ndk = gradle_support_ndk
+        self.app_abi = app_abi
+        self.ndk_mode = ndk_mode
 
         # check environment variable
         if self.use_studio:
@@ -60,6 +71,21 @@ class AndroidBuilder(object):
         cocos.CMDRunner.run_cmd(command, self._verbose, cwd=cwd)
 
     def _parse_cfg(self):
+        # get the properties for sign release apk
+        if self.use_studio:
+            self.key_store_str = AndroidBuilder.GRADLE_KEY_STORE
+            self.key_alias_str = AndroidBuilder.GRADLE_KEY_ALIAS
+            self.key_store_pass_str = AndroidBuilder.GRADLE_KEY_STORE_PASS
+            self.key_alias_pass_str = AndroidBuilder.GRADLE_KEY_ALIAS_PASS
+        else:
+            self.key_store_str = AndroidBuilder.ANT_KEY_STORE
+            self.key_alias_str = AndroidBuilder.ANT_KEY_ALIAS
+            self.key_store_pass_str = AndroidBuilder.ANT_KEY_STORE_PASS
+            self.key_alias_pass_str = AndroidBuilder.ANT_KEY_ALIAS_PASS
+
+        if self.gradle_support_ndk:
+            return
+
         self.cfg_path = os.path.join(self.app_android_root, BUILD_CFIG_FILE)
         try:
             f = open(self.cfg_path)
@@ -78,18 +104,6 @@ class AndroidBuilder(object):
             self.res_files = cfg[project_compile.CCPluginCompile.CFG_KEY_COPY_RESOURCES]
 
         self.ndk_module_paths = cfg['ndk_module_path']
-
-        # get the properties for sign release apk
-        if self.use_studio:
-            self.key_store_str = AndroidBuilder.GRADLE_KEY_STORE
-            self.key_alias_str = AndroidBuilder.GRADLE_KEY_ALIAS
-            self.key_store_pass_str = AndroidBuilder.GRADLE_KEY_STORE_PASS
-            self.key_alias_pass_str = AndroidBuilder.GRADLE_KEY_ALIAS_PASS
-        else:
-            self.key_store_str = AndroidBuilder.ANT_KEY_STORE
-            self.key_alias_str = AndroidBuilder.ANT_KEY_ALIAS
-            self.key_store_pass_str = AndroidBuilder.ANT_KEY_STORE_PASS
-            self.key_alias_pass_str = AndroidBuilder.ANT_KEY_ALIAS_PASS
 
         move_cfg = {}
         self.key_store = None
@@ -167,25 +181,95 @@ class AndroidBuilder(object):
                 ext = os.path.splitext(lib_file)[1]
                 if ext == ".a" or ext == ".so":
                     os.remove(lib_file)
-                    
+
+    def _get_android_sdk_tools_ver(self, sdk_tools_path):
+        cfg_file = os.path.join(sdk_tools_path, 'source.properties')
+
+        if os.path.isfile(cfg_file):
+            f = open(cfg_file)
+            lines = f.readlines()
+            pattern = r'^Pkg\.Revision=(\d+)\.(\d+)'
+            for l in lines:
+                match = re.match(pattern, l.strip())
+                if match:
+                    return ((int)(match.group(1)), (int)(match.group(2)))
+
+        raise cocos.CCPluginError(MultiLanguage.get_string('COMPILE_ERROR_UNKNOWN_ANDROID_SDK_TOOLS_VERSION'),
+                                  cocos.CCPluginError.ERROR_PATH_NOT_FOUND)
+
+    def _update_project_properties(self, folder_path, target_str):
+        props_path = os.path.join(folder_path, 'project.properties')
+        f = open(props_path)
+        lines = f.readlines()
+        f.close()
+
+        pattern = r'^target=(.*)$'
+        matched = False
+        new_line = 'target=%s\n' % target_str
+        for i in range(0, len(lines)):
+            l = lines[i]
+            match = re.match(pattern, l.strip())
+            if match:
+                lines[i] = new_line
+                matched = True
+
+        if not matched:
+            lines.append('\n')
+            lines.append(new_line)
+
+        f = open(props_path, 'w')
+        f.writelines(lines)
+        f.close()
+
+    def _write_local_properties(self, folder_path):
+        local_porps_path = os.path.join(folder_path, 'local.properties')
+        lines = [
+            'sdk.dir=%s\n' % self.sdk_root,
+            'ndk.dir=%s\n' % cocos.check_environment_variable('NDK_ROOT')
+        ]
+        f = open(local_porps_path, 'w')
+        f.writelines(lines)
+        f.close()
+
     def update_project(self, android_platform):
+        if self.gradle_support_ndk:
+            # If gradle supports ndk build, should write local.properties manually
+            self._write_local_properties(self.app_android_root)
+            return
+
+        # Android SDK removed android command & ant support from SDK tools 25.3.0
+        # So, we should check the Android SDK tools version
+        sdk_tools_folder = os.path.join(self.sdk_root, 'tools')
+        main_ver, minor_ver = self._get_android_sdk_tools_ver(sdk_tools_folder)
+        no_ant = False
+        if main_ver > 25 or (main_ver == 25 and minor_ver >= 3):
+            no_ant = True
+
+        if not self.use_studio and no_ant:
+            # Tip the message that ant is not supported from Android SDK tools 25.3.0
+            raise cocos.CCPluginError(MultiLanguage.get_string('COMPILE_ERROR_ANT_NOT_SUPPORTED'),
+                                      cocos.CCPluginError.ERROR_OTHERS)
+
         if self.use_studio:
             manifest_path = os.path.join(self.app_android_root, 'app')
         else:
             manifest_path = self.app_android_root
 
-        sdk_tool_path = os.path.join(self.sdk_root, "tools", "android")
-
         # check the android platform
         target_str = self.check_android_platform(self.sdk_root, android_platform, manifest_path)
 
-        # update project
-        command = "%s update project -t %s -p %s" % (cocos.CMDRunner.convert_path_to_cmd(sdk_tool_path), target_str, manifest_path)
-        self._run_cmd(command)
+        if no_ant:
+            # should manually update the project
+            self._write_local_properties(manifest_path)
+            self._update_project_properties(manifest_path, target_str)
+        else:
+            # update project
+            sdk_tool_path = os.path.join(sdk_tools_folder, "android")
+            command = "%s update project -t %s -p %s" % (cocos.CMDRunner.convert_path_to_cmd(sdk_tool_path), target_str, manifest_path)
+            self._run_cmd(command)
 
-        # update lib-projects
-        property_path = manifest_path
-        self.update_lib_projects(self.sdk_root, sdk_tool_path, android_platform, property_path)
+            # update lib-projects
+            self.update_lib_projects(self.sdk_root, sdk_tool_path, android_platform, manifest_path)
 
         if self.use_studio:
             # copy the local.properties to the app_android_root
@@ -356,7 +440,7 @@ class AndroidBuilder(object):
         self._project.invoke_custom_step_script(cocos_project.Project.CUSTOM_STEP_POST_ANT_BUILD,
                                                 target_platform, args_ant_copy)
 
-    def gradle_build_apk(self, build_mode):
+    def gradle_build_apk(self, build_mode, android_platform, compile_obj):
         # check the compileSdkVersion & buildToolsVersion
         check_file = os.path.join(self.app_android_root, 'app', 'build.gradle')
         f = open(check_file)
@@ -404,6 +488,36 @@ class AndroidBuilder(object):
 
         mode_str = 'Debug' if build_mode == 'debug' else 'Release'
         cmd = '"%s" --parallel --info assemble%s' % (gradle_path, mode_str)
+
+        if self.gradle_support_ndk:
+            add_props = {
+                AndroidBuilder.GRADLE_PROP_NDK_MODE: self.ndk_mode
+            }
+            if android_platform:
+                ret = self.check_android_platform(self.sdk_root, android_platform, None)
+                pattern = r'android-(\d+)'
+                match = re.match(pattern, ret)
+                if match:
+                    add_props[AndroidBuilder.GRADLE_PROP_TARGET_VERSION] = (int)(match.group(1))
+
+            if self.app_abi:
+                add_props[AndroidBuilder.GRADLE_PROP_APP_ABI] = ':'.join(self.app_abi.split(' '))
+
+            if self._project._is_script_project():
+                if compile_obj._compile_script:
+                    add_props[AndroidBuilder.GRADLE_PROP_COMPILE_SCRIPT] = 1
+                else:
+                    add_props[AndroidBuilder.GRADLE_PROP_COMPILE_SCRIPT] = 0
+
+            if self._project._is_lua_project():
+                if compile_obj._lua_encrypt:
+                    add_props[AndroidBuilder.GRADLE_PROP_LUA_ENCRYPT] = 1
+                    add_props[AndroidBuilder.GRADLE_PROP_LUA_ENCRYPT_KEY] = compile_obj._lua_encrypt_key
+                    add_props[AndroidBuilder.GRADLE_PROP_LUA_ENCRYPT_SIGN] = compile_obj._lua_encrypt_sign
+
+            for key in add_props.keys():
+                cmd += ' -P%s=%s' % (key, add_props[key])
+
         self._run_cmd(cmd, cwd=self.app_android_root)
 
     class LuaBuildType:
@@ -461,7 +575,7 @@ class AndroidBuilder(object):
 
         return self.LuaBuildType.UNKNOWN
 
-    def do_build_apk(self, build_mode, no_apk, output_dir, custom_step_args, compile_obj):
+    def do_build_apk(self, build_mode, no_apk, output_dir, custom_step_args, android_platform, compile_obj):
         if self.use_studio:
             assets_dir = os.path.join(self.app_android_root, "app", "assets")
             project_name = None
@@ -489,45 +603,44 @@ class AndroidBuilder(object):
             project_name = self._xml_attr(self.app_android_root, 'build.xml', 'project', 'name')
             gen_apk_folder = os.path.join(self.app_android_root, 'bin')
 
-        # copy resources
-        self._copy_resources(custom_step_args, assets_dir)
+        # gradle supports copy assets & compile scripts from engine 3.15
+        if not self.gradle_support_ndk:
+            # copy resources
+            self._copy_resources(custom_step_args, assets_dir)
 
-        # check the project config & compile the script files
-        if self._project._is_lua_project():
-            print "generate byte code ............"
-            src_dir = os.path.join(assets_dir, 'src')
-            build_type = self._get_build_type(compile_obj.app_abi)
+            # check the project config & compile the script files
+            if self._project._is_lua_project():
+                src_dir = os.path.join(assets_dir, 'src')
+                build_type = self._get_build_type(compile_obj.app_abi)
 
-            # only build 64bit
-            if build_type == self.LuaBuildType.ONLY_BUILD_64BIT:
-                if build_mode == 'release':
+                # only build 64bit
+                if build_type == self.LuaBuildType.ONLY_BUILD_64BIT:
                     dst_dir = os.path.join(assets_dir, 'src/64bit')
-                    compile_obj.compile_lua_scripts(src_dir, dst_dir, True)
-                    # remove unneeded lua files
-                    compile_obj._remove_file_with_ext(src_dir, '.lua')
-                    shutil.rmtree(os.path.join(src_dir, 'cocos'))
-                else:
+                    is_compiled = compile_obj.compile_lua_scripts(src_dir, dst_dir, True)
+                    if is_compiled:
+                        # remove unneeded lua files
+                        compile_obj._remove_file_with_ext(src_dir, '.lua')
+                        shutil.rmtree(os.path.join(src_dir, 'cocos'))
+
+                # only build 32bit
+                if build_type == self.LuaBuildType.ONLY_BUILD_32BIT:
+                    # build 32-bit bytecode
                     compile_obj.compile_lua_scripts(src_dir, src_dir, False)
 
-            # only build 32bit
-            if build_type == self.LuaBuildType.ONLY_BUILD_32BIT:
-                # build 32-bit bytecode
-                compile_obj.compile_lua_scripts(src_dir, src_dir, False)
-            
-            # build 32bit and 64bit
-            if build_type == self.LuaBuildType.BUILD_32BIT_AND_64BIT:
-                # build 64-bit bytecode
-                dst_dir = os.path.join(assets_dir, 'src/64bit')
-                compile_obj.compile_lua_scripts(src_dir, dst_dir, True)
-                # build 32-bit bytecode
-                compile_obj.compile_lua_scripts(src_dir, src_dir, False)
+                # build 32bit and 64bit
+                if build_type == self.LuaBuildType.BUILD_32BIT_AND_64BIT:
+                    # build 64-bit bytecode
+                    dst_dir = os.path.join(assets_dir, 'src/64bit')
+                    compile_obj.compile_lua_scripts(src_dir, dst_dir, True)
+                    # build 32-bit bytecode
+                    compile_obj.compile_lua_scripts(src_dir, src_dir, False)
 
-            if build_type == self.LuaBuildType.UNKNOWN:
-                # haven't set APP_ABI in parameter and Application.mk, default build 32bit
-                compile_obj.compile_lua_scripts(src_dir, src_dir, False)
+                if build_type == self.LuaBuildType.UNKNOWN:
+                    # haven't set APP_ABI in parameter and Application.mk, default build 32bit
+                    compile_obj.compile_lua_scripts(src_dir, src_dir, False)
 
-        if self._project._is_js_project():
-            compile_obj.compile_js_scripts(assets_dir, assets_dir)
+            if self._project._is_js_project():
+                compile_obj.compile_js_scripts(assets_dir, assets_dir)
 
         if not no_apk:
             # gather the sign info if necessary
@@ -536,7 +649,7 @@ class AndroidBuilder(object):
 
             # build apk
             if self.use_studio:
-                self.gradle_build_apk(build_mode)
+                self.gradle_build_apk(build_mode, android_platform, compile_obj)
             else:
                 self.ant_build_apk(build_mode, custom_step_args)
 
