@@ -121,11 +121,11 @@ class CCPluginRun(cocos.CCPlugin):
                     # get the matched data
                     typeNum = int(match.group(2))
                     tmpType = match.group(1)
-                    tmpIOSVer = float(match.group(3))
+                    tmpIOSVer = match.group(3)
 
                     if ((typeNum > phoneTypeNum) or
                         (typeNum == phoneTypeNum and tmpType > phoneType) or
-                        (typeNum == phoneTypeNum and tmpType == phoneType and tmpIOSVer > iosVer)):
+                        (typeNum == phoneTypeNum and tmpType == phoneType and cocos.version_compare(tmpIOSVer, '>', iosVer))):
                         # find the max phone type number first
                         ret = id
                         retName = name.strip()
@@ -304,16 +304,6 @@ class CCPluginRun(cocos.CCPlugin):
         with cocos.pushd(run_root):
             self._run_with_desktop_options(os.path.join(run_root, exe))
 
-    def run_wp8(self, dependencies):
-        if not self._platforms.is_wp8_active():
-            return
-
-        deploy_dep = dependencies['deploy']
-        xap_path = deploy_dep.xap_path
-        deploy_tool = deploy_dep.deploy_tool
-        cmd = '"%s" /installlaunch "%s" /targetDevice:xd' % (deploy_tool, xap_path)
-        self._run_cmd(cmd)
-
     def run_linux(self, dependencies):
         if not self._platforms.is_linux_active():
             return
@@ -346,6 +336,5 @@ class CCPluginRun(cocos.CCPlugin):
         self.run_web(dependencies)
         self.run_win32(dependencies)
         self.run_linux(dependencies)
-        self.run_wp8(dependencies)
         self.run_tizen(dependencies)
 

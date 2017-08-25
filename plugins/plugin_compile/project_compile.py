@@ -796,7 +796,7 @@ class CCPluginCompile(cocos.CCPlugin):
                 "\"%s\"" % self.xcworkspace if self.cocoapods else projectPath,
                 "-configuration",
                 "%s" % 'Debug' if self._mode == 'debug' else 'Release',
-                "-scheme" if self.cocoapods else "-target",
+                "-scheme",
                 "\"%s\"" % targetName,
                 "%s" % "-arch i386" if self.use_sdk == 'iphonesimulator' else '',
                 "-sdk",
@@ -805,14 +805,23 @@ class CCPluginCompile(cocos.CCPlugin):
                 "%s" % "VALID_ARCHS=\"i386\"" if self.use_sdk == 'iphonesimulator' else ''
                 ])
 
+            # PackageApplication is removed since xcode 8.3, should use new method to generate .ipa
+            # should generate .xcarchive first, then generate .ipa
+            xcode_version = cocos.get_xcode_version()
+
+            use_new_ipa_method = cocos.version_compare(xcode_version,">=",8.3)
+
             if self._sign_id is not None:
-                command = "%s CODE_SIGN_IDENTITY=\"%s\"" % (command, self._sign_id)
+                if use_new_ipa_method:
+                    archive_path = os.path.join(output_dir, "%s.xcarchive" % targetName)
+                    command = "%s CODE_SIGN_IDENTITY=\"%s\" -archivePath %s archive" % (command, self._sign_id, archive_path)
+                else:
+                    command = "%s CODE_SIGN_IDENTITY=\"%s\"" % (command, self._sign_id)
 
             command = self.append_xcpretty_if_installed(command)
             self._run_cmd(command)
 
             filelist = os.listdir(output_dir)
-
             for filename in filelist:
                 name, extention = os.path.splitext(filename)
                 if extention == '.a':
@@ -825,13 +834,22 @@ class CCPluginCompile(cocos.CCPlugin):
 
             if self._sign_id is not None:
                 # generate the ipa
-                app_path = os.path.join(output_dir, "%s.app" % targetName)
                 ipa_path = os.path.join(output_dir, "%s.ipa" % targetName)
-                ipa_cmd = "xcrun -sdk %s PackageApplication -v \"%s\" -o \"%s\"" % (self.use_sdk, app_path, ipa_path)
-                self._run_cmd(ipa_cmd)
+                if use_new_ipa_method:
+                    # generate exportoptions.plist file if needed
+                    export_options_plist_path = os.path.join(output_dir, "exportoptions.plist")
+                    self._generate_export_options_plist(export_options_plist_path)
+
+                    archive_path = os.path.join(output_dir, "%s.xcarchive" % targetName)
+                    ipa_cmd = "xcodebuild -exportArchive -archivePath %s -exportPath %s -exportOptionsPlist %s" % (archive_path, output_dir, export_options_plist_path)
+                    self._run_cmd(ipa_cmd)
+                else:
+                    ipa_cmd = "xcrun -sdk %s PackageApplication -v \"%s\" -o \"%s\"" % (self.use_sdk, self._iosapp_path, ipa_path)
+                    self._run_cmd(ipa_cmd)
 
             cocos.Logging.info(MultiLanguage.get_string('COMPILE_INFO_BUILD_SUCCEED'))
-        except:
+        except Exception, e:
+            print str(e)
             raise cocos.CCPluginError(MultiLanguage.get_string('COMPILE_ERROR_BUILD_FAILED'),
                                       cocos.CCPluginError.ERROR_BUILD_FAILED)
         finally:
@@ -844,6 +862,32 @@ class CCPluginCompile(cocos.CCPlugin):
                     engine_js_dir = self.get_engine_js_dir()
                     if engine_js_dir is not None:
                         self.reset_backup_dir(engine_js_dir)
+
+    def _generate_export_options_plist(self, export_options_plist_path):
+        if os.path.exists(export_options_plist_path):
+            return
+
+        file_content_head = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+          <dict>
+            <key>compileBitcode</key>
+            <false/>
+        """
+
+        # should use add-hoc for release mode?
+        method = "app-store" if self._mode == 'release' else "development"
+        method_content = "<key>method</key>\n<string>%s</string>" % method
+
+        file_content_end = """
+            </dict>
+        </plist>
+        """
+
+        file_content = file_content_head + method_content + file_content_end
+        with open(export_options_plist_path, 'w') as outfile:
+            outfile.write(file_content)
 
     def build_mac(self):
         if not self._platforms.is_mac_active():
@@ -1009,8 +1053,8 @@ class CCPluginCompile(cocos.CCPlugin):
         return ret
 
     def get_min_vs_version(self):
-        if self._platforms.is_wp8_active() or self._platforms.is_wp8_1_active() or self._platforms.is_metro_active():
-            # WP8 project required VS 2013
+        if self._platforms.is_metro_active():
+            # metro project required VS 2013
             return 2013
         else:
             # win32 project required VS 2012
@@ -1434,120 +1478,6 @@ class CCPluginCompile(cocos.CCPlugin):
 
         cocos.Logging.info(MultiLanguage.get_string('COMPILE_INFO_BUILD_SUCCEED'))
 
-    def get_wp8_product_id(self, manifest_file):
-        # get the product id from manifest
-        from xml.dom import minidom
-
-        ret = None
-        try:
-            doc_node = minidom.parse(manifest_file)
-            root_node = doc_node.documentElement
-            app_node = root_node.getElementsByTagName("App")[0]
-            ret = app_node.attributes["ProductID"].value
-            ret = ret.strip("{}")
-        except:
-            raise cocos.CCPluginError(MultiLanguage.get_string('COMPILE_ERROR_MANIFEST_PARSE_FAILED_FMT', manifest_file),
-                                      cocos.CCPluginError.ERROR_PARSE_FILE)
-
-        return ret
-
-
-    def build_wp8(self):
-        if not self._platforms.is_wp8_active():
-            return
-
-        proj_path = self._project.get_project_dir()
-        sln_path = self._platforms.project_path()
-        output_dir = self._output_dir
-
-        cocos.Logging.info(MultiLanguage.get_string('COMPILE_INFO_BUILDING'))
-
-        # get the solution file & project name
-        cfg_obj = self._platforms.get_current_config()
-        if cfg_obj.sln_file is not None:
-            sln_name = cfg_obj.sln_file
-            if cfg_obj.project_name is None:
-                raise cocos.CCPluginError(MultiLanguage.get_string('COMPILE_ERROR_CFG_NOT_FOUND_FMT',
-                                                                   (cocos_project.Win32Config.KEY_PROJECT_NAME,
-                                                                    cocos_project.Win32Config.KEY_SLN_FILE,
-                                                                    cocos_project.Project.CONFIG)),
-                                          cocos.CCPluginError.ERROR_WRONG_CONFIG)
-            else:
-                name = cfg_obj.project_name
-        else:
-            name, sln_name = self.checkFileByExtention(".sln", sln_path)
-            if not sln_name:
-                message = MultiLanguage.get_string('COMPILE_ERROR_SLN_NOT_FOUND')
-                raise cocos.CCPluginError(message, cocos.CCPluginError.ERROR_PATH_NOT_FOUND)
-
-        wp8_projectdir = cfg_obj.wp8_proj_path
-
-        # build the project
-        self.project_name = name
-        projectPath = os.path.join(sln_path, sln_name)
-        build_mode = 'Debug' if self._is_debug_mode() else 'Release'
-        self.build_vs_project(projectPath, self.project_name, build_mode, self.vs_version)
-
-        # copy files
-        build_folder_path = os.path.join(wp8_projectdir, cfg_obj.build_folder_path, build_mode)
-        if not os.path.isdir(build_folder_path):
-            message = MultiLanguage.get_string('COMPILE_ERROR_BUILD_PATH_NOT_FOUND_FMT', build_folder_path)
-            raise cocos.CCPluginError(message, cocos.CCPluginError.ERROR_PATH_NOT_FOUND)
-
-        # create output dir if it not existed
-        if not os.path.exists(output_dir):
-            os.makedirs(output_dir)
-
-        # copy xap
-        files = os.listdir(build_folder_path)
-        proj_xap_name = "%s_%s_x86.xap" % (self.project_name, build_mode)
-        for filename in files:
-            if filename == proj_xap_name:
-                file_path = os.path.join(build_folder_path, filename)
-                cocos.Logging.info(MultiLanguage.get_string('COMPILE_INFO_COPYING_FMT', filename))
-                shutil.copy(file_path, output_dir)
-                break
-
-        # get the manifest file path
-        manifest_file = os.path.join(wp8_projectdir, cfg_obj.manifest_path)
-        self.product_id = self.get_wp8_product_id(manifest_file)
-        self.run_root = output_dir
-        self.xap_file_name = proj_xap_name
-
-    def build_wp8_1(self):
-        if not self._platforms.is_wp8_1_active():
-            return
-
-        wp8_1_projectdir = self._platforms.project_path()
-        output_dir = self._output_dir
-
-        cocos.Logging.info(MultiLanguage.get_string('COMPILE_INFO_BUILDING'))
-
-        # get the solution file & project name
-        cfg_obj = self._platforms.get_current_config()
-        if cfg_obj.sln_file is not None:
-            sln_name = cfg_obj.sln_file
-            if cfg_obj.project_name is None:
-                raise cocos.CCPluginError(MultiLanguage.get_string('COMPILE_ERROR_CFG_NOT_FOUND_FMT',
-                                                                   (cocos_project.Win32Config.KEY_PROJECT_NAME,
-                                                                    cocos_project.Win32Config.KEY_SLN_FILE,
-                                                                    cocos_project.Project.CONFIG)),
-                                          cocos.CCPluginError.ERROR_WRONG_CONFIG)
-            else:
-                name = cfg_obj.project_name
-        else:
-            name, sln_name = self.checkFileByExtention(".sln", wp8_1_projectdir)
-            if not sln_name:
-                message = MultiLanguage.get_string('COMPILE_ERROR_SLN_NOT_FOUND')
-                raise cocos.CCPluginError(message, cocos.CCPluginError.ERROR_PATH_NOT_FOUND)
-            name = "%s.WindowsPhone" % name
-
-        # build the project
-        self.project_name = name
-        projectPath = os.path.join(wp8_1_projectdir, sln_name)
-        build_mode = 'Debug' if self._is_debug_mode() else 'Release'
-        self.build_vs_project(projectPath, self.project_name, build_mode, self.vs_version)
-
     def build_metro(self):
         if not self._platforms.is_metro_active():
             return
@@ -1719,8 +1649,6 @@ class CCPluginCompile(cocos.CCPlugin):
         self.build_win32()
         self.build_web()
         self.build_linux()
-        self.build_wp8()
-        self.build_wp8_1()
         self.build_metro()
         self.build_tizen()
 
